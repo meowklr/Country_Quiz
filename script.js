@@ -1,21 +1,56 @@
 const QUESTION_DURATION_SECONDS = 10;
-const BUTTON_REGION_MAP = {
-  startQuizAfrique: "africa",
-  startQuizAmerique: "americas",
-  startQuizAsie: "asia",
-  startQuizEurope: "europe",
-  startQuizOceanie: "oceania",
-  startQuiz: null
+const START_BUTTON_LABEL = "Commencer le quiz";
+const STOP_BUTTON_LABEL = "Arrêter et retourner au menu";
+
+const REGION_CONFIGS = {
+  africa: { apiRegion: "africa", label: "Afrique", description: "Testez vos connaissances sur les pays d'Afrique !" },
+  americas: { apiRegion: "americas", label: "Amérique", description: "Testez vos connaissances sur les pays d'Amérique !" },
+  asia: { apiRegion: "asia", label: "Asie", description: "Testez vos connaissances sur les pays d'Asie !" },
+  europe: { apiRegion: "europe", label: "Europe", description: "Testez vos connaissances sur les pays d'Europe !" },
+  oceania: { apiRegion: "oceania", label: "Océanie", description: "Testez vos connaissances sur les pays d'Océanie !" },
+  world: { apiRegion: null, label: "Monde entier", description: "Testez vos connaissances sur les pays du monde entier !" }
 };
 
 const countriesCache = new Map();
-let activeTimerInterval = null;
-let activeProgressAnimationFrame = null;
 
-// Recupere les pays d'une region (ou du monde) et met le resultat en cache.
-async function fetchCountries(region) {
+let allCountriesForCurrentRegion = [];
+let questionIsLocked = false;
+let currentCorrectCode = "";
+let currentCorrectCountry = null;
+let timerInterval = null;
+let progressFrame = null;
+
+function clearTimers() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  if (progressFrame) {
+    cancelAnimationFrame(progressFrame);
+    progressFrame = null;
+  }
+}
+
+function countryName(country) {
+  return country.translations?.fra?.common || country.name?.common || "Nom inconnu";
+}
+
+function pickThreeCountries(countries) {
+  const used = new Set();
+  const picked = [];
+
+  while (picked.length < 3) {
+    const index = Math.floor(Math.random() * countries.length);
+    if (used.has(index)) continue;
+    used.add(index);
+    picked.push(countries[index]);
+  }
+
+  return picked;
+}
+
+async function loadCountries(region) {
   const cacheKey = region || "world";
-  // Evite de rappeler l'API a chaque nouvelle question pour la meme region.
   if (countriesCache.has(cacheKey)) {
     return countriesCache.get(cacheKey);
   }
@@ -23,276 +58,207 @@ async function fetchCountries(region) {
   const baseUrl = region
     ? "https://restcountries.com/v3.1/region/" + encodeURIComponent(region)
     : "https://restcountries.com/v3.1/all";
-  const url = baseUrl + "?fields=cca3,name,translations,flags";
 
-  const response = await fetch(url);
+  const response = await fetch(baseUrl + "?fields=cca3,name,translations,flags");
   if (!response.ok) {
-    throw new Error("Impossible de charger les pays");
+    throw new Error("Impossible de charger les pays.");
   }
 
-  const countries = await response.json();
-  countriesCache.set(cacheKey, countries);
-  return countries;
-}
+  const rawCountries = await response.json();
+  const cleanCountries = rawCountries.filter((country) => {
+    return Boolean(country.cca3) && Boolean(country.flags?.svg || country.flags?.png);
+  });
 
-// Retourne le nom du pays en francais avec fallback si la traduction manque.
-function getCountryNameFr(country) {
-  return country.translations?.fra?.common || country.name?.common || "Nom inconnu";
-}
-
-// Genere un entier aleatoire entre 0 et maxExclusive - 1.
-function getRandomInt(maxExclusive) {
-  return Math.floor(Math.random() * maxExclusive);
-}
-
-// Tire un sous-ensemble aleatoire de pays sans doublons.
-function pickRandomCountries(countries, count) {
-  if (countries.length <= count) {
-    return [...countries];
+  if (cleanCountries.length < 3) {
+    throw new Error("Pas assez de données pour jouer.");
   }
 
-  // Tire des indexes uniques pour garantir des choix distincts.
-  const usedIndexes = new Set();
-  const picks = [];
-  while (picks.length < count) {
-    const idx = getRandomInt(countries.length);
-    if (usedIndexes.has(idx)) continue;
-    usedIndexes.add(idx);
-    picks.push(countries[idx]);
-  }
-  return picks;
+  countriesCache.set(cacheKey, cleanCountries);
+  return cleanCountries;
 }
 
-// Melange un tableau en place avec l'algorithme Fisher-Yates.
-function shuffleInPlace(array) {
-  // Fisher-Yates: melange uniforme en place.
-  for (let i = array.length - 1; i > 0; i -= 1) {
-    const j = getRandomInt(i + 1);
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
+function lockQuestion(feedbackText, list) {
+  if (questionIsLocked) return;
 
-// Arrete le timer actif pour eviter plusieurs comptes a rebours en meme temps.
-function clearActiveTimer() {
-  // Important pour ne jamais avoir plusieurs timers en parallele.
-  if (activeTimerInterval) {
-    clearInterval(activeTimerInterval);
-    activeTimerInterval = null;
-  }
-  if (activeProgressAnimationFrame) {
-    cancelAnimationFrame(activeProgressAnimationFrame);
-    activeProgressAnimationFrame = null;
-  }
-}
+  questionIsLocked = true;
+  clearTimers();
 
-// Construit l'etat d'une nouvelle question (choix, bonne reponse, references UI).
-function createQuestionState(countries, list) {
-  const choices = pickRandomCountries(countries, 3);
-  const correctCountry = choices[getRandomInt(choices.length)];
-
-  return {
-    countries,
-    list,
-    choices,
-    correctCountry,
-    correctCode: correctCountry.cca3,
-    questionLocked: false,
-    answerButtons: [],
-    timerItem: null,
-    timerLabel: null,
-    progressFill: null,
-    feedbackItem: null
-  };
-}
-
-// Cree et affiche la ligne du timer dans la liste du quiz.
-function renderTimerItem(list) {
-  const timerItem = document.createElement("li");
-  timerItem.className = "quiz-timer";
-
-  const timerLabel = document.createElement("div");
-  timerLabel.className = "quiz-timer-label";
-
-  const progressTrack = document.createElement("div");
-  progressTrack.className = "quiz-progress";
-
-  const progressFill = document.createElement("div");
-  progressFill.className = "quiz-progress-fill";
-
-  progressTrack.appendChild(progressFill);
-  timerItem.appendChild(timerLabel);
-  timerItem.appendChild(progressTrack);
-  list.appendChild(timerItem);
-  return {
-    timerItem,
-    timerLabel,
-    progressFill
-  };
-}
-
-// Affiche le drapeau de la bonne reponse pour la question en cours.
-function renderFlagItem(list, country) {
-  const flagItem = document.createElement("li");
-  flagItem.className = "quiz-flag-item";
-
-  const flagImg = document.createElement("img");
-  flagImg.className = "quiz-flag-image";
-  flagImg.src = country.flags?.svg || country.flags?.png || "";
-  flagImg.alt = country.flags?.alt || "Drapeau a deviner";
-
-  flagItem.appendChild(flagImg);
-  list.appendChild(flagItem);
-}
-
-// Cree la ligne de feedback qui affiche la question puis le resultat.
-function renderFeedbackItem(list) {
-  const feedbackItem = document.createElement("li");
-  feedbackItem.className = "quiz-feedback";
-  feedbackItem.textContent = "Quel pays correspond a ce drapeau ?";
-  list.appendChild(feedbackItem);
-  return feedbackItem;
-}
-
-// Revele la correction, colore les boutons et verrouille la question.
-function revealAnswers(state, feedbackText) {
-  if (state.questionLocked) return;
-  state.questionLocked = true;
-  clearActiveTimer();
-
-  state.answerButtons.forEach((btn) => {
-    btn.disabled = true;
-    btn.classList.add("is-disabled");
-    if (btn.dataset.countryCode === state.correctCode) {
-      btn.classList.add("is-correct");
+  const answerButtons = list.querySelectorAll('[data-answer="true"]');
+  answerButtons.forEach((button) => {
+    button.disabled = true;
+    button.classList.add("is-disabled");
+    if (button.dataset.countryCode === currentCorrectCode) {
+      button.classList.add("is-correct");
     } else {
-      btn.classList.add("is-incorrect");
+      button.classList.add("is-incorrect");
     }
   });
 
-  state.feedbackItem.textContent = feedbackText;
+  const feedback = list.querySelector(".quiz-feedback");
+  if (feedback) feedback.textContent = feedbackText;
 }
 
-// Cree les boutons de propositions et branche la verification au clic.
-function renderAnswerItems(state) {
-  const shuffledChoices = shuffleInPlace([...state.choices]);
+function showQuestion(list) {
+  clearTimers();
+  questionIsLocked = false;
+  list.innerHTML = "";
 
-  shuffledChoices.forEach((country) => {
-    const item = document.createElement("li");
-    item.className = "quiz-answer-item";
+  const choices = pickThreeCountries(allCountriesForCurrentRegion);
+  const correctIndex = Math.floor(Math.random() * choices.length);
+  currentCorrectCountry = choices[correctIndex];
+  currentCorrectCode = currentCorrectCountry.cca3;
+
+  const answerOrder = [...choices];
+  for (let i = answerOrder.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [answerOrder[i], answerOrder[j]] = [answerOrder[j], answerOrder[i]];
+  }
+
+  const timerItem = document.createElement("li");
+  timerItem.className = "quiz-timer";
+  const timerLabel = document.createElement("div");
+  timerLabel.className = "quiz-timer-label";
+  timerLabel.textContent = "Temps restant : " + QUESTION_DURATION_SECONDS + " s";
+  const progress = document.createElement("div");
+  progress.className = "quiz-progress";
+  const progressFill = document.createElement("div");
+  progressFill.className = "quiz-progress-fill";
+  progress.appendChild(progressFill);
+  timerItem.appendChild(timerLabel);
+  timerItem.appendChild(progress);
+  list.appendChild(timerItem);
+
+  const flagItem = document.createElement("li");
+  flagItem.className = "quiz-flag-item";
+  const flagImg = document.createElement("img");
+  flagImg.className = "quiz-flag-image";
+  flagImg.src = currentCorrectCountry.flags?.svg || currentCorrectCountry.flags?.png || "";
+  flagImg.alt = currentCorrectCountry.flags?.alt || "Drapeau à deviner";
+  flagItem.appendChild(flagImg);
+  list.appendChild(flagItem);
+
+  const feedbackItem = document.createElement("li");
+  feedbackItem.className = "quiz-feedback";
+  feedbackItem.textContent = "Quel pays correspond à ce drapeau ?";
+  list.appendChild(feedbackItem);
+
+  answerOrder.forEach((country) => {
+    const answerItem = document.createElement("li");
+    answerItem.className = "quiz-answer-item";
 
     const answerButton = document.createElement("button");
     answerButton.type = "button";
     answerButton.className = "quiz-answer-button";
-    answerButton.textContent = getCountryNameFr(country);
     answerButton.dataset.answer = "true";
     answerButton.dataset.countryCode = country.cca3;
+    answerButton.textContent = countryName(country);
 
-    answerButton.addEventListener("click", () => {
-      if (state.questionLocked) return;
-      const isCorrect = country.cca3 === state.correctCode;
-      revealAnswers(state, isCorrect ? "Bonne réponse !" : "Mauvaise réponse.");
-    });
-
-    state.answerButtons.push(answerButton);
-    item.appendChild(answerButton);
-    state.list.appendChild(item);
+    answerItem.appendChild(answerButton);
+    list.appendChild(answerItem);
   });
-}
 
-// Affiche le bouton pour passer a la question suivante.
-function renderNextButton(state) {
   const nextItem = document.createElement("li");
   nextItem.className = "quiz-next-item";
-
   const nextButton = document.createElement("button");
   nextButton.type = "button";
   nextButton.className = "quiz-next-button";
   nextButton.textContent = "Question suivante";
-  nextButton.addEventListener("click", () => {
-    clearActiveTimer();
-    renderQuestion(state.countries, state.list);
-  });
-
+  nextButton.dataset.nextQuestion = "true";
   nextItem.appendChild(nextButton);
-  state.list.appendChild(nextItem);
-}
+  list.appendChild(nextItem);
 
-// Lance le compte a rebours et force la correction quand le temps est ecoule.
-function startQuestionTimer(state) {
-  let timeLeft = QUESTION_DURATION_SECONDS;
-  state.timerLabel.textContent = "Temps restant : " + timeLeft + " s";
-  state.progressFill.style.width = "0%";
-
-  const totalDurationMs = QUESTION_DURATION_SECONDS * 1000;
+  let secondsLeft = QUESTION_DURATION_SECONDS;
   const animationStart = performance.now();
+  const animationDuration = QUESTION_DURATION_SECONDS * 1000;
 
-  function animateProgress(now) {
-    const elapsed = Math.min(now - animationStart, totalDurationMs);
-    const progressPercent = (elapsed / totalDurationMs) * 100;
-    state.progressFill.style.width = progressPercent + "%";
-
-    if (elapsed < totalDurationMs && !state.questionLocked) {
-      activeProgressAnimationFrame = requestAnimationFrame(animateProgress);
+  function animate(now) {
+    if (questionIsLocked) return;
+    const elapsed = Math.min(now - animationStart, animationDuration);
+    progressFill.style.width = (elapsed / animationDuration) * 100 + "%";
+    if (elapsed < animationDuration) {
+      progressFrame = requestAnimationFrame(animate);
     }
   }
 
-  activeProgressAnimationFrame = requestAnimationFrame(animateProgress);
+  progressFrame = requestAnimationFrame(animate);
 
-  activeTimerInterval = setInterval(() => {
-    timeLeft -= 1;
-    state.timerLabel.textContent = "Temps restant : " + timeLeft + " s";
+  timerInterval = setInterval(() => {
+    if (questionIsLocked) return;
 
-    if (timeLeft <= 5) {
-      state.timerItem.classList.add("is-warning");
-    }
+    secondsLeft -= 1;
+    timerLabel.textContent = "Temps restant : " + secondsLeft + " s";
+    if (secondsLeft <= 5) timerItem.classList.add("is-warning");
 
-    if (timeLeft <= 0) {
-      revealAnswers(
-        state,
-        "Temps ecoule ! La bonne reponse etait : " + getCountryNameFr(state.correctCountry)
+    if (secondsLeft <= 0) {
+      lockQuestion(
+        "Temps écoulé ! La bonne réponse était : " + countryName(currentCorrectCountry),
+        list
       );
     }
   }, 1000);
 }
 
-// Ordonne le rendu complet d'une question (timer, drapeau, reponses, navigation).
-function renderQuestion(countries, list) {
-  clearActiveTimer();
-  list.innerHTML = "";
+function initQuizPage() {
+  const startButton = document.getElementById("startQuiz");
+  const list = document.getElementById("countryList");
+  if (!startButton || !list) return;
 
-  const state = createQuestionState(countries, list);
-  const timerElements = renderTimerItem(list);
-  state.timerItem = timerElements.timerItem;
-  state.timerLabel = timerElements.timerLabel;
-  state.progressFill = timerElements.progressFill;
-  renderFlagItem(list, state.correctCountry);
-  state.feedbackItem = renderFeedbackItem(list);
-  renderAnswerItems(state);
-  renderNextButton(state);
-  startQuestionTimer(state);
-}
+  const params = new URLSearchParams(window.location.search);
+  const regionSlug = params.get("region") || "world";
+  const region = REGION_CONFIGS[regionSlug] || REGION_CONFIGS.world;
 
-// Demarre le quiz pour la region demandee et affiche la premiere question.
-async function startQuiz(region) {
-  try {
-    const list = document.getElementById("countryList");
-    if (!list) {
-      throw new Error("Element #countryList introuvable dans la page");
+  const title = document.getElementById("quizTitle");
+  const subtitle = document.getElementById("quizSubtitle");
+  if (title) title.textContent = "Bienvenue au Country Quiz - " + region.label;
+  if (subtitle) subtitle.textContent = region.description;
+  document.title = "Country Quiz - " + region.label;
+
+  const activeNavLink = document.querySelector('[data-region-link="' + regionSlug + '"]');
+  if (activeNavLink) activeNavLink.setAttribute("aria-current", "page");
+
+  startButton.dataset.quizRunning = "false";
+  startButton.textContent = START_BUTTON_LABEL;
+
+  startButton.addEventListener("click", async () => {
+    if (startButton.dataset.quizRunning === "true") {
+      clearTimers();
+      list.innerHTML = "";
+      startButton.dataset.quizRunning = "false";
+      startButton.textContent = START_BUTTON_LABEL;
+      window.location.href = "index.html";
+      return;
     }
 
-    const countries = await fetchCountries(region);
-    renderQuestion(countries, list);
-  } catch (e) {
-    console.error(e.message);
-  }
+    startButton.dataset.quizRunning = "true";
+    startButton.textContent = STOP_BUTTON_LABEL;
+
+    try {
+      allCountriesForCurrentRegion = await loadCountries(region.apiRegion);
+      showQuestion(list);
+    } catch (error) {
+      startButton.dataset.quizRunning = "false";
+      startButton.textContent = START_BUTTON_LABEL;
+      list.innerHTML = "";
+      const errorItem = document.createElement("li");
+      errorItem.className = "quiz-feedback";
+      errorItem.textContent = error.message || "Une erreur est survenue.";
+      list.appendChild(errorItem);
+    }
+  });
+
+  list.addEventListener("click", (event) => {
+    const answerButton = event.target.closest('[data-answer="true"]');
+    if (answerButton && !questionIsLocked) {
+      const isCorrect = answerButton.dataset.countryCode === currentCorrectCode;
+      lockQuestion(isCorrect ? "Bonne réponse !" : "Mauvaise réponse.", list);
+      return;
+    }
+
+    const nextButton = event.target.closest('[data-next-question="true"]');
+    if (nextButton && allCountriesForCurrentRegion.length >= 3) {
+      showQuestion(list);
+    }
+  });
 }
 
-// Branche tous les boutons de pages aux regions correspondantes au chargement.
-document.addEventListener("DOMContentLoaded", () => {
-  Object.entries(BUTTON_REGION_MAP).forEach(([buttonId, region]) => {
-    const button = document.getElementById(buttonId);
-    if (!button) return;
-    button.addEventListener("click", () => startQuiz(region));
-  });
-});
+initQuizPage();

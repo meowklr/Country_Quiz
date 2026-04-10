@@ -60,7 +60,7 @@ button {
     color: #fff;
     border: none;
     padding: 10px 20px;
-    border-radius: 5px;
+    border-radius: 15px;
     cursor: pointer;
     transition: all 0.2s ease;
 }
@@ -75,17 +75,17 @@ button:hover {
     background-color: rgba(255, 255, 255, 0.1);
     padding: 30px;
     margin: 0px 15vw;
-    border-radius: 10px;
+    border-radius: 15px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
 .region_links {
     display: grid;
     flex-direction: column;
-    grid-template-columns: repeat(4, minmax(100px, 1fr));
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
     justify-content: center;
     margin-top: 20px;
-    gap: 10px;
+    gap: 15px;
 }
 
 .region_links a {
@@ -98,13 +98,15 @@ button:hover {
     text-align: center;
     padding: 10px 20px;
     background-color: rgba(255, 255, 255, 0.2);
-    border-radius: 5px;
+    border-radius: 10px;
     transition: all 0.3s ease;   
 }
 
 .region_links a:hover {
     background-color: rgba(255, 255, 255, 0.3);
     transform: translateY(-1px);
+    transform: scale3d(1.05, 1.05, 1.05);
+
 }
 
 .quiz_list {

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Country Quiz</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <nav>
+        <a href="index.html">Accueil</a>
+        <a href="quiz.html?region=africa" data-region-link="africa">Afrique</a>
+        <a href="quiz.html?region=americas" data-region-link="americas">Amérique</a>
+        <a href="quiz.html?region=asia" data-region-link="asia">Asie</a>
+        <a href="quiz.html?region=europe" data-region-link="europe">Europe</a>
+        <a href="quiz.html?region=oceania" data-region-link="oceania">Océanie</a>
+        <a href="quiz.html?region=world" data-region-link="world">Monde entier</a>
+    </nav>
+    <header>
+        <h1 id="quizTitle">Bienvenue au Country Quiz</h1>
+    </header>
+    <main>
+        <div class="quiz_container">
+            <p id="quizSubtitle">Testez vos connaissances sur les pays du monde !</p>
+            <button id="startQuiz">Commencer le quiz</button>
+            <ul id="countryList" class="quiz_list"></ul>
+        </div>
+    </main>
+</body>
+</html>
