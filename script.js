@@ -3,12 +3,12 @@ const START_BUTTON_LABEL = "Commencer le quiz";
 const STOP_BUTTON_LABEL = "Arrêter et retourner au menu";
 
 const REGION_CONFIGS = {
-  africa: { apiRegion: "africa", label: "Afrique", description: "Testez vos connaissances sur les pays d'Afrique !" },
-  americas: { apiRegion: "americas", label: "Amérique", description: "Testez vos connaissances sur les pays d'Amérique !" },
-  asia: { apiRegion: "asia", label: "Asie", description: "Testez vos connaissances sur les pays d'Asie !" },
-  europe: { apiRegion: "europe", label: "Europe", description: "Testez vos connaissances sur les pays d'Europe !" },
-  oceania: { apiRegion: "oceania", label: "Océanie", description: "Testez vos connaissances sur les pays d'Océanie !" },
-  world: { apiRegion: null, label: "Monde entier", description: "Testez vos connaissances sur les pays du monde entier !" }
+  africa: { regionKey: "africa", label: "Afrique", description: "Testez vos connaissances sur les pays d'Afrique !" },
+  americas: { regionKey: "americas", label: "Amérique", description: "Testez vos connaissances sur les pays d'Amérique !" },
+  asia: { regionKey: "asia", label: "Asie", description: "Testez vos connaissances sur les pays d'Asie !" },
+  europe: { regionKey: "europe", label: "Europe", description: "Testez vos connaissances sur les pays d'Europe !" },
+  oceania: { regionKey: "oceania", label: "Océanie", description: "Testez vos connaissances sur les pays d'Océanie !" },
+  world: { regionKey: null, label: "Monde entier", description: "Testez vos connaissances sur les pays du monde entier !" }
 };
 
 const countriesCache = new Map();
@@ -49,28 +49,47 @@ function pickThreeCountries(countries) {
   return picked;
 }
 
-async function loadCountries(region) {
-  const cacheKey = region || "world";
+/**
+ * Charge les pays depuis la base de données locale (indépendante du réseau et des dépréciations d'API).
+ */
+async function loadCountries(regionKey) {
+  const cacheKey = regionKey || "world";
   if (countriesCache.has(cacheKey)) {
     return countriesCache.get(cacheKey);
   }
 
-  const baseUrl = region
-    ? "https://restcountries.com/v3.1/region/" + encodeURIComponent(region)
-    : "https://restcountries.com/v3.1/all";
+  let source = [];
 
-  const response = await fetch(baseUrl + "?fields=cca3,name,translations,flags");
-  if (!response.ok) {
-    throw new Error("Impossible de charger les pays.");
+  // 1. Priorité aux données locales injectées via countries-data.js (fonctionne en local direct file://)
+  if (Array.isArray(window.COUNTRIES_DATA) && window.COUNTRIES_DATA.length > 0) {
+    source = window.COUNTRIES_DATA;
+  } else {
+    // 2. Repli via le fichier JSON local si disponible
+    try {
+      const response = await fetch("countries.json");
+      if (response.ok) {
+        source = await response.json();
+      }
+    } catch {
+      // Ignoré en cas d'ouverture directe sans serveur
+    }
   }
 
-  const rawCountries = await response.json();
-  const cleanCountries = rawCountries.filter((country) => {
+  // Filtrage par région si une région spécifique est demandée
+  let filtered = source;
+  if (regionKey && regionKey !== "world") {
+    filtered = source.filter(
+      (c) => c.region && c.region.toLowerCase() === regionKey.toLowerCase()
+    );
+  }
+
+  // Vérification de la validité des données
+  const cleanCountries = filtered.filter((country) => {
     return Boolean(country.cca3) && Boolean(country.flags?.svg || country.flags?.png);
   });
 
   if (cleanCountries.length < 3) {
-    throw new Error("Pas assez de données pour jouer.");
+    throw new Error("Pas assez de données pour jouer dans cette région.");
   }
 
   countriesCache.set(cacheKey, cleanCountries);
@@ -229,13 +248,17 @@ function initQuizPage() {
       return;
     }
 
+    startButton.disabled = true;
     startButton.dataset.quizRunning = "true";
     startButton.textContent = STOP_BUTTON_LABEL;
+    list.innerHTML = '<li class="quiz-feedback">Chargement des pays...</li>';
 
     try {
-      allCountriesForCurrentRegion = await loadCountries(region.apiRegion);
+      allCountriesForCurrentRegion = await loadCountries(region.regionKey);
+      startButton.disabled = false;
       showQuestion(list);
     } catch (error) {
+      startButton.disabled = false;
       startButton.dataset.quizRunning = "false";
       startButton.textContent = START_BUTTON_LABEL;
       list.innerHTML = "";
@@ -250,7 +273,12 @@ function initQuizPage() {
     const answerButton = event.target.closest('[data-answer="true"]');
     if (answerButton && !questionIsLocked) {
       const isCorrect = answerButton.dataset.countryCode === currentCorrectCode;
-      lockQuestion(isCorrect ? "Bonne réponse !" : "Mauvaise réponse.", list);
+      lockQuestion(
+        isCorrect
+          ? "Bonne réponse !"
+          : "Mauvaise réponse. La bonne réponse était : " + countryName(currentCorrectCountry),
+        list
+      );
       return;
     }
 
